@@ -49,10 +49,13 @@ import sys
 import urllib2
 import json
 import subprocess
-from argparse import ArgumentParser
+import argparse
 
 
-mainparser = ArgumentParser(description='Git helper utilities')
+mainparser = argparse.ArgumentParser(
+    description='Git helper utilities',
+    formatter_class=argparse.ArgumentDefaultsHelpFormatter
+)
 subparsers = mainparser.add_subparsers(help='commands')
 
 
@@ -71,7 +74,7 @@ def hilite(string, color, bold):
     return '\x1b[%sm%s\x1b[0m' % (';'.join(attr), string)
 
 
-def query_repos(context):
+def query_github_repos(context):
     org_url = 'https://api.github.com/orgs/%s/repos' % context
     user_url = 'https://api.github.com/users/%s/repos' % context
     query = '%s?page=%i&per_page=50'
@@ -98,21 +101,28 @@ def query_repos(context):
     return data
 
 
+def query_gitlab_repos(context, url, token):
+    # not yet implemented
+    return []
+
+
 def perform_clone(arguments):
     base_uri = 'git@github.com:%s/%s.git'
     context = arguments.context[0]
     if arguments.repository:
         repos = arguments.repository
     else:
-        repos = [_['name'] for _ in query_repos(args.context)]
+        repos = [_['name'] for _ in query_github_repos(args.context)]
     for repo in repos:
         uri = base_uri % (context, repo)
         cmd = ['git', 'clone', uri]
         subprocess.call(cmd)
 
 
-sub = subparsers.add_parser('clone',
-                            help='Clone from an organisation or a user')
+sub = subparsers.add_parser(
+    'clone',
+    help='Clone from an organisation or a user'
+)
 sub.add_argument('context', nargs=1, help='Name of organisation or user')
 sub.add_argument(
     'repository', nargs='*',
@@ -148,8 +158,10 @@ def perform_pull(arguments):
         os.chdir('..')
 
 
-sub = subparsers.add_parser('pull',
-                            help='Pull distinct or all repositories in folder.')
+sub = subparsers.add_parser(
+    'pull',
+    help='Pull distinct or all repositories in folder.'
+)
 sub.add_argument('repository', nargs='*',
                  help='Name of repositories to pull, leave empty to pull all')
 sub.set_defaults(func=perform_pull)
@@ -166,31 +178,69 @@ def perform(cmd):
 
 
 def perform_backup(arguments):
-    context = arguments.context[0]
-    if context not in os.listdir('.'):
-        os.mkdir(context)
-    os.chdir(context)
-    contents = os.listdir('.')
-    data = query_repos(context)
-    base_uri = 'git@github.com:%s/%s.git'
-    for repo in data:
-        name = repo['name']
-        fs_name = '%s.git' % name
-        if fs_name in contents:
-            print "Fetching existing local repository '%s'" % fs_name
-            os.chdir(fs_name)
-            perform(['git', 'fetch', 'origin'])
-            os.chdir('..')
+    baseurl = arguments.url
+    repotype = arguments.type
+    base_dir = os.path.abspath('.')
+    for context in arguments.context:
+        if context not in os.listdir('.'):
+            os.mkdir(context)
+        os.chdir(context)
+        contents = os.listdir('.')
+        if repotype == 'github':
+            data = query_github_repos(context)
+        elif repotype == 'gitlab':
+            url = baseurl.split('@')[1]
+            data = query_gitlab_repos(context, url, arguments.authtoken
+                )
         else:
-            print "Cloning new repository '%s'" % fs_name
-            uri = base_uri % (context, name)
-            perform(['git', 'clone', '--bare', '--mirror', uri])
+            raise ValueError(
+                'Invalid repository type given: {0}'.format(repotype)
+            )
+        base_uri = '{0}:{1}/{2}.git'
+        for repo in data:
+            name = repo['name']
+            fs_name = '{0}.git'.format(name)
+            if fs_name in contents:
+                print "Updating repository backup '{0}'".format(fs_name)
+                os.chdir(fs_name)
+                perform(['git', 'fetch', 'origin'])
+                os.chdir('..')
+            else:
+                print "Cloning new backup '{0}'".format(fs_name)
+                uri = base_uri.format(baseurl, context, name)
+                perform(['git', 'clone', '--bare', '--mirror', uri])
+        os.chdir(base_dir)
 
 
-sub = subparsers.add_parser('backup',
-                            help='Backup all repositories from an organisation '
-                                 'or a user')
-sub.add_argument('context', nargs=1, help='Name of organisation or user')
+sub = subparsers.add_parser(
+    'backup',
+    help='Backup all repositories from an organisation or a user'
+)
+sub.add_argument(
+    '-t',
+    '--type',
+    nargs='?',
+    help='Repository type',
+    choices=['github', 'gitlab'],
+    default='github',
+)
+sub.add_argument(
+    '-u',
+    '--url',
+    nargs='?',
+    help='base address, usally prefixed with username',
+    default='git@github.com',
+)
+sub.add_argument(
+    '-a',
+    '--authtoken',
+    nargs='?',
+    help='Authentication token (gitlab only)',
+    default='git@github.com',
+)
+sub.add_argument(
+    'context',
+    nargs='+', help='Name of organisation or user')
 sub.set_defaults(func=perform_backup)
 
 
